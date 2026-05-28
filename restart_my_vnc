@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+set -u
+
+XSTARTUP="/share/apps/vnc/mate.xstartup"
+
+log() {
+  printf '%s\n' "$*"
+}
+
+die() {
+  printf '错误：%s\n' "$*" >&2
+  exit 1
+}
+
+CURRENT_USER="$(whoami)"
+
+if [ -z "${DISPLAY:-}" ]; then
+  die "没有检测到 DISPLAY，请确认你是在 VNC 桌面终端里执行。"
+fi
+
+DISPLAY_VALUE="${DISPLAY#:}"
+DISPLAY_NUM="${DISPLAY_VALUE%%.*}"
+
+if ! [[ "$DISPLAY_NUM" =~ ^[0-9]+$ ]]; then
+  die "DISPLAY 格式不正确，必须能提取出纯数字 display 号。当前 DISPLAY=${DISPLAY}"
+fi
+
+if [ -z "$CURRENT_USER" ]; then
+  die "无法识别当前用户。"
+fi
+
+if [ ! -x "$XSTARTUP" ]; then
+  die "xstartup 不存在或不可执行：$XSTARTUP"
+fi
+
+log "普通用户重启 VNC"
+log "用户: $CURRENT_USER"
+log "Display: :$DISPLAY_NUM"
+log
+
+log "[1/4] 停止当前 VNC..."
+vncserver -kill ":$DISPLAY_NUM" || true
+
+log "[2/4] 清理 Xvnc..."
+pkill -u "$CURRENT_USER" -f "Xvnc :$DISPLAY_NUM" || true
+
+log "[3/4] 删除锁文件..."
+rm -f "/tmp/.X${DISPLAY_NUM}-lock"
+rm -f "/tmp/.X11-unix/X${DISPLAY_NUM}"
+
+sleep 2
+
+log "[4/4] 重新启动 VNC..."
+vncserver ":$DISPLAY_NUM" \
+  -depth 24 \
+  -geometry 1920x1080 \
+  -xstartup "$XSTARTUP"
+
+log
+log "完成，请重新连接 VNC"

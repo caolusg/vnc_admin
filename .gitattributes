@@ -1,0 +1,2 @@
+restart_my_vnc text eol=lf
+restart_vnc_admin text eol=lf

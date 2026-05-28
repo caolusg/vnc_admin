@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+set -u
+
+XSTARTUP="/share/apps/vnc/mate.xstartup"
+
+log() {
+  printf '%s\n' "$*"
+}
+
+die() {
+  printf '错误：%s\n' "$*" >&2
+  exit 1
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+  die "restart_vnc_admin 必须使用 root 或 sudo 执行。"
+fi
+
+if [ "$#" -ne 2 ]; then
+  die "用法：sudo /share/apps/vnc/restart_vnc_admin 用户名 display号"
+fi
+
+TARGET_USER="$1"
+DISPLAY_NUM="$2"
+
+if [ -z "$TARGET_USER" ]; then
+  die "用户名不能为空。"
+fi
+
+if [ -z "$DISPLAY_NUM" ]; then
+  die "display 不能为空。"
+fi
+
+if ! [[ "$TARGET_USER" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  die "用户名只能包含字母、数字、下划线和中划线。"
+fi
+
+if ! [[ "$DISPLAY_NUM" =~ ^[0-9]+$ ]]; then
+  die "display 只能是数字。"
+fi
+
+if ! id "$TARGET_USER" >/dev/null 2>&1; then
+  die "用户不存在：$TARGET_USER"
+fi
+
+if [ ! -x "$XSTARTUP" ]; then
+  die "xstartup 不存在或不可执行：$XSTARTUP"
+fi
+
+PORT=$((5900 + DISPLAY_NUM))
+
+log "管理员重启 VNC"
+log "用户: $TARGET_USER"
+log "Display: :$DISPLAY_NUM"
+log "端口: $PORT"
+log
+
+log "[1/4] 停止用户 VNC..."
+su - "$TARGET_USER" -c "vncserver -kill :$DISPLAY_NUM" || true
+
+log "[2/4] 清理 Xvnc..."
+pkill -u "$TARGET_USER" -f "Xvnc :$DISPLAY_NUM" || true
+
+log "[3/4] 删除锁文件..."
+rm -f "/tmp/.X${DISPLAY_NUM}-lock"
+rm -f "/tmp/.X11-unix/X${DISPLAY_NUM}"
+
+sleep 2
+
+log "[4/4] 重新启动 VNC..."
+su - "$TARGET_USER" -c "vncserver :$DISPLAY_NUM -depth 24 -geometry 1920x1080 -xstartup $XSTARTUP"
+
+log
+log "完成"
