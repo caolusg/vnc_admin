@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -u
+set -o pipefail
 
 XSTARTUP="/share/apps/vnc/mate.xstartup"
 
@@ -13,7 +14,19 @@ die() {
   exit 1
 }
 
+kill_xvnc() {
+  local user="$1"
+  local display_num="$2"
+
+  pgrep -u "$user" -f "Xvnc :${display_num}([[:space:]]|$)" |
+    while IFS= read -r pid; do
+      kill "$pid" || true
+    done
+}
+
 CURRENT_USER="$(whoami)"
+LOG_FILE="/tmp/restart_my_vnc.${CURRENT_USER}.$$ .log"
+LOG_FILE="${LOG_FILE// /}"
 
 if [ -z "${DISPLAY:-}" ]; then
   die "没有检测到 DISPLAY，请确认你是在 VNC 桌面终端里执行。"
@@ -37,25 +50,64 @@ fi
 log "普通用户重启 VNC"
 log "用户: $CURRENT_USER"
 log "Display: :$DISPLAY_NUM"
+log "日志: $LOG_FILE"
 log
 
-log "[1/4] 停止当前 VNC..."
+log "[1/4] 创建后台重启任务..."
+RESTART_JOB="$(mktemp "/tmp/restart_my_vnc.${CURRENT_USER}.${DISPLAY_NUM}.XXXXXX")" ||
+  die "无法创建临时重启脚本。"
+chmod 700 "$RESTART_JOB"
+cat >"$RESTART_JOB" <<EOF
+#!/usr/bin/env bash
+set -u
+set -o pipefail
+
+XSTARTUP="$XSTARTUP"
+CURRENT_USER="$CURRENT_USER"
+DISPLAY_NUM="$DISPLAY_NUM"
+LOG_FILE="$LOG_FILE"
+
+{
+  printf '%s\n' "[后台] 等待当前 VNC 关闭..."
+  sleep 3
+
+  printf '%s\n' "[后台] 清理 Xvnc..."
+  pgrep -u "\$CURRENT_USER" -f "Xvnc :\${DISPLAY_NUM}([[:space:]]|\$)" |
+    while IFS= read -r pid; do
+      kill "\$pid" || true
+    done
+
+  printf '%s\n' "[后台] 删除锁文件..."
+  rm -f "/tmp/.X\${DISPLAY_NUM}-lock"
+  rm -f "/tmp/.X11-unix/X\${DISPLAY_NUM}"
+
+  printf '%s\n' "[后台] 重新启动 VNC..."
+  vncserver ":\$DISPLAY_NUM" \\
+    -depth 24 \\
+    -geometry 1920x1080 \\
+    -xstartup "\$XSTARTUP"
+  status=\$?
+
+  rm -f "$RESTART_JOB"
+  exit "\$status"
+} >>"\$LOG_FILE" 2>&1
+EOF
+
+if command -v setsid >/dev/null 2>&1; then
+  nohup setsid "$RESTART_JOB" >/dev/null 2>&1 &
+else
+  nohup "$RESTART_JOB" >/dev/null 2>&1 &
+fi
+
+log "[2/4] 停止当前 VNC..."
 vncserver -kill ":$DISPLAY_NUM" || true
 
-log "[2/4] 清理 Xvnc..."
-pkill -u "$CURRENT_USER" -f "Xvnc :$DISPLAY_NUM" || true
+log "[3/4] 清理 Xvnc..."
+kill_xvnc "$CURRENT_USER" "$DISPLAY_NUM" || true
 
-log "[3/4] 删除锁文件..."
+log "[4/4] 删除锁文件..."
 rm -f "/tmp/.X${DISPLAY_NUM}-lock"
 rm -f "/tmp/.X11-unix/X${DISPLAY_NUM}"
 
-sleep 2
-
-log "[4/4] 重新启动 VNC..."
-vncserver ":$DISPLAY_NUM" \
-  -depth 24 \
-  -geometry 1920x1080 \
-  -xstartup "$XSTARTUP"
-
 log
-log "完成，请重新连接 VNC"
+log "已提交后台重启任务，请稍等几秒后重新连接 VNC。"

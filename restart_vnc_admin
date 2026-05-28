@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -u
+set -o pipefail
 
 XSTARTUP="/share/apps/vnc/mate.xstartup"
 
@@ -11,6 +12,16 @@ log() {
 die() {
   printf '错误：%s\n' "$*" >&2
   exit 1
+}
+
+kill_xvnc() {
+  local user="$1"
+  local display_num="$2"
+
+  pgrep -u "$user" -f "Xvnc :${display_num}([[:space:]]|$)" |
+    while IFS= read -r pid; do
+      kill "$pid" || true
+    done
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -60,7 +71,7 @@ log "[1/4] 停止用户 VNC..."
 su - "$TARGET_USER" -c "vncserver -kill :$DISPLAY_NUM" || true
 
 log "[2/4] 清理 Xvnc..."
-pkill -u "$TARGET_USER" -f "Xvnc :$DISPLAY_NUM" || true
+kill_xvnc "$TARGET_USER" "$DISPLAY_NUM" || true
 
 log "[3/4] 删除锁文件..."
 rm -f "/tmp/.X${DISPLAY_NUM}-lock"
@@ -69,7 +80,8 @@ rm -f "/tmp/.X11-unix/X${DISPLAY_NUM}"
 sleep 2
 
 log "[4/4] 重新启动 VNC..."
-su - "$TARGET_USER" -c "vncserver :$DISPLAY_NUM -depth 24 -geometry 1920x1080 -xstartup $XSTARTUP"
+su - "$TARGET_USER" -c "vncserver :$DISPLAY_NUM -depth 24 -geometry 1920x1080 -xstartup '$XSTARTUP'" ||
+  die "VNC 启动失败：用户 $TARGET_USER，display :$DISPLAY_NUM"
 
 log
 log "完成"
